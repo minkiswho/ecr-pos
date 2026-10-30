@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.ECR;
-  var VERSION = 'R1.1';
+  var VERSION = 'R1.2';
   var KEY = 'ecr_' + CFG.branch + '_';
   var POLL_MS = 15000, IDLE_LOCK_MS = 5 * 60000;
 
@@ -203,6 +203,7 @@
       Object.keys(S.orders).forEach(function (id) { if (!next[id] && pendingFor(id)) next[id] = S.orders[id]; });
       S.orders = next;
       if (r.menu) { S.menu = r.menu; save('menu', r.menu); }
+      if (r.imagesVer && r.imagesVer !== load('imagesVer', '')) { await loadImages(true); save('imagesVer', r.imagesVer); }
       if (r.mode && S.auth.mode !== r.mode) { S.auth.mode = r.mode; save('auth', S.auth); }
       persistOrders();
       S.lastSync = Date.now(); S.sync = 'idle'; S.syncErr = '';
@@ -215,7 +216,7 @@
   }
   async function loadImages(force) {
     if (!force && Object.keys(S.images).length) return;
-    try { var r = await rpc('getImages', {}); S.images = r.images || {}; save('images', S.images); render(); } catch (e) { }
+    try { var r = await rpc('getImages', {}); S.images = r.images || {}; save('images', S.images); if (S.view !== 'order' && S.view !== 'pay') render(); } catch (e) { }
   }
 
   /* ---------------- app lock ---------------- */
@@ -585,7 +586,7 @@
     var html = header('', '', '') + '<main class="pad-b settings">' +
       '<div class="card"><h4>เครื่องนี้</h4><p>สาขา' + esc(CFG.name) + ' · ' + roleTh + ' · ' + VERSION + ' · ' + (a.mode === 'live' ? 'ใช้งานจริง' : '<b class="pink">โหมดทดสอบ</b>') + '</p>' +
       '<p class="muted">รอส่ง ' + S.outbox.length + ' · ต้องตรวจ ' + S.review.length + (S.syncErr ? ' · ' + esc(S.syncErr) : '') + '</p>' +
-      '<div class="row gap wrap"><button class="btn ghost" data-a="sync-now">ซิงก์ตอนนี้</button><button class="btn ghost" data-a="review">รายการต้องตรวจ</button>' +
+      '<div class="row gap wrap"><button class="btn ghost" data-a="sync-now">ซิงก์ตอนนี้</button><button class="btn ghost" data-a="reload-images">โหลดรูปใหม่</button><button class="btn ghost" data-a="review">รายการต้องตรวจ</button>' +
       (a.lockHash ? '<button class="btn ghost" data-a="lock">ล็อกแอป</button>' : '') + '<button class="btn ghost danger-t" data-a="logout">ออกจากระบบ</button></div></div>' +
       '<div class="card"><h4>เครื่องพิมพ์ (Bluetooth)</h4><p>' + (pr.connected ? 'เชื่อมต่อแล้ว: ' + esc(pr.name) : 'ยังไม่เชื่อมต่อ' + (pr.name ? ' (ล่าสุด: ' + esc(pr.name) + ')' : '')) + '</p>' +
       '<div class="row gap wrap"><button class="btn primary" data-a="printer-connect">' + (pr.connected ? 'เปลี่ยนเครื่องพิมพ์' : 'เชื่อมต่อเครื่องพิมพ์') + '</button>' +
@@ -871,6 +872,7 @@
         try { await rpc('sendSummary', { date: S.summaryDate || today() }); toast('ส่งสรุปแล้ว'); } catch (err) { toast(err.message, 'err'); }
         break;
       }
+      case 'reload-images': await loadImages(true); toast('โหลดรูปใหม่แล้ว'); break;
       case 'sync-now': case 'sync-detail': nextTry = 0; flush(); pull(); toast('กำลังซิงก์…'); break;
       case 'review': reviewList(); break;
       case 'lock': lockNow(); break;

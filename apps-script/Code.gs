@@ -4,7 +4,7 @@
  * Built by Rocky (Claude) — 2026-10-30
  */
 var TZ = 'Asia/Bangkok';
-var VERSION = 'R1.0';
+var VERSION = 'R1.1';
 var CTX = {};
 
 var ST = { SALE: '✅ ขาย', OPEN: '⏳ ค้างจ่าย', VOID: '❌ ยกเลิก' };
@@ -346,7 +346,7 @@ function getAll_(p) {
     return (c >= from && c <= to) || (d >= from && d <= to);
   }).map(publicOrder_);
   var menu = loadMenu_();
-  return { orders: orders, menu: menu, role: CTX.role, from: from, to: to, branch: cfg_().branch, mode: cfg_().mode };
+  return { orders: orders, menu: menu, role: CTX.role, from: from, to: to, branch: cfg_().branch, mode: cfg_().mode, imagesVer: prop_('IMAGES_VER', '1') };
 }
 
 function saveOrder_(p) {
@@ -472,9 +472,10 @@ function saveImage_(p) {
   if (data.length > 49000) throw err_('TOO_BIG', 'รูปใหญ่เกินไป');
   var t = table_('Images', ['key', 'dataUrl']);
   for (var i = 0; i < t.rows.length; i++) {
-    if (String(t.rows[i][0]) === key) { t.s.getRange(i + 2, 2).setValue(data); return { key: key }; }
+    if (String(t.rows[i][0]) === key) { t.s.getRange(i + 2, 2).setValue(data); P_().setProperty('IMAGES_VER', String(Date.now())); return { key: key }; }
   }
   t.s.appendRow([key, data]);
+  P_().setProperty('IMAGES_VER', String(Date.now()));
   return { key: key };
 }
 
