@@ -731,3 +731,20 @@ function setup() {
   Logger.log('รหัสผู้จัดการ: %s', prop_('CODE_MANAGER'));
   Logger.log('รหัสดูอย่างเดียว: %s', prop_('CODE_VIEWER'));
 }
+
+/** ทดสอบระบบจริงบนชีททดสอบ (รันจาก editor เท่านั้น; ใช้ได้เฉพาะโหมด test) */
+function selfTest() {
+  if (cfg_().mode !== 'test') throw new Error('selfTest ใช้ได้เฉพาะโหมดทดสอบ');
+  var code = prop_('CODE_CASHIER'), mgr = prop_('CODE_MANAGER');
+  function call(b) { CTX = {}; var r = JSON.parse(doPost({ postData: { contents: JSON.stringify(b) } }).getContent()); Logger.log('%s → %s', b.action, JSON.stringify(r).slice(0, 300)); return r; }
+  var menu = loadMenu_(), m = menu.menuItems.filter(function (x) { return !(x.groups || []).length; })[0];
+  var id = 'zz' + Date.now().toString(36) + 'tst';
+  var a = call({ action: 'saveOrder', code: code, opId: id + 'a', baseRevision: 0, order: { id: id, type: 'dinein', table: '99', items: [{ lineId: 'l1', menuId: m.id, qty: 2, selected: [] }] } });
+  if (!a.ok) throw new Error('save failed');
+  var b = call({ action: 'pay', code: code, opId: id + 'b', baseRevision: a.order.revision, method: 'cash', received: 1000, order: { id: id, type: 'dinein', table: '99', items: [{ lineId: 'l1', menuId: m.id, qty: 2, selected: [] }] } });
+  if (!b.ok || b.order.status !== 'paid') throw new Error('pay failed');
+  var c = call({ action: 'void', code: mgr, opId: id + 'c', id: id, reason: 'selfTest' });
+  if (!c.ok || c.order.status !== 'void') throw new Error('void failed');
+  var g = call({ action: 'getAll', code: code });
+  Logger.log('SELFTEST OK — orders loaded: %s, menu items: %s', g.orders.length, g.menu.menuItems.length);
+}
