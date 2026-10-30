@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.ECR;
-  var VERSION = 'R1.0';
+  var VERSION = 'R1.1';
   var KEY = 'ecr_' + CFG.branch + '_';
   var POLL_MS = 15000, IDLE_LOCK_MS = 5 * 60000;
 
@@ -631,7 +631,10 @@
   async function editItem(id) {
     var m = S.menuDraft, isNew = !id;
     var x = isNew ? { id: 'm' + uid(), name: '', price: 0, catId: (m.categories[0] || {}).id, groups: [], available: true } : m.menuItems.filter(function (y) { return y.id === id; })[0];
+    var img = S.images[x.id];
     var r = await modal('<h3>' + (isNew ? 'เมนูใหม่' : 'แก้เมนู') + '</h3>' +
+      '<div class="imgrow">' + (img ? '<img src="' + img + '" alt="">' : '<span class="noimg">ไม่มีรูป</span>') +
+      '<button class="btn ghost sm" data-m="img">' + (img ? 'เปลี่ยนรูป' : 'เพิ่มรูป') + '</button>' + (img ? '<button class="btn ghost sm danger-t" data-m="imgdel">ลบรูป</button>' : '') + '</div>' +
       '<label class="fld"><span>ชื่อเมนู</span><input name="name" value="' + esc(x.name) + '"></label>' +
       '<label class="fld"><span>ราคา (บาท)</span><input name="price" inputmode="numeric" value="' + esc(x.price) + '"></label>' +
       '<label class="fld"><span>หมวด</span><select name="catId">' + m.categories.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === x.catId ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select></label>' +
@@ -639,6 +642,14 @@
       '<label class="chk"><input type="checkbox" name="available"' + (x.available !== false ? ' checked' : '') + '> เปิดขาย</label>' +
       '<div class="row gap mt">' + (isNew ? '' : '<button class="btn ghost danger-t" data-m="del">ลบเมนู</button>') + '<button class="btn ghost grow" data-m="no">ยกเลิก</button><button class="btn primary grow" data-m="ok">ตกลง</button></div>', { cls: 'tall' });
     if (!r || r.act === 'no') return;
+    if (r.act === 'img' || r.act === 'imgdel') {
+      var url = '';
+      if (r.act === 'img') { url = await pickImage(480, 0.8); if (!url) { toast('ยกเลิก หรือรูปใหญ่เกินไป', 'err'); return editItem(id); } }
+      try { await rpc('saveImage', { key: x.id, dataUrl: url, managerPin: S.mgrPin || '' }); if (url) S.images[x.id] = url; else delete S.images[x.id]; save('images', S.images); toast(url ? 'บันทึกรูปแล้ว' : 'ลบรูปแล้ว'); }
+      catch (err) { toast(err.message, 'err'); }
+      if (isNew) { x.name = r.data.name.trim() || x.name; x.price = Number(r.data.price) || 0; x.catId = r.data.catId; m.menuItems.push(x); render(); return editItem(x.id); }
+      return editItem(id);
+    }
     if (r.act === 'del') { if (await confirmBox('ลบเมนู ' + x.name + '?', 'บิลเก่ายังเก็บชื่อเดิมไว้', 'ลบ', true)) m.menuItems = m.menuItems.filter(function (y) { return y.id !== x.id; }); render(); return; }
     var d = r.data;
     if (!d.name.trim()) return toast('ต้องใส่ชื่อเมนู', 'err');
