@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.ECR;
-  var VERSION = 'R1.2';
+  var VERSION = 'R1.3';
   var KEY = 'ecr_' + CFG.branch + '_';
   var POLL_MS = 15000, IDLE_LOCK_MS = 5 * 60000;
 
@@ -373,6 +373,21 @@
     }
     return doc;
   }
+  async function printLabel(no) {
+    if (!window.ECRPrinter) return;
+    var now = new Date().toISOString();
+    var doc = [
+      { t: 'text', s: 'LINE MAN', size: 40, bold: true, align: 'center' },
+      { t: 'hr' },
+      { t: 'text', s: no, size: 64, bold: true, align: 'center' },
+      { t: 'hr' },
+      { t: 'text', s: 'ข้าวมันไก่เอกมัย · สาขา' + CFG.name, size: 24, align: 'center' },
+      { t: 'text', s: day(now) + ' ' + hm(now), size: 22, align: 'center' }
+    ];
+    try { await ECRPrinter.printCanvas(ECRPrinter.render(doc, Number(S.prefs.paper) || 80)); toast('พิมพ์ฉลาก ' + no + ' แล้ว'); }
+    catch (e) { toast('พิมพ์ไม่สำเร็จ: ' + e.message, 'err'); }
+    renderStatus();
+  }
   async function printOrder(o, kind) {
     if (!window.ECRPrinter) return;
     try {
@@ -533,14 +548,14 @@
   }
   function billRow(o) {
     var st = o.status === 'paid' ? '<span class="chip ok">' + (o.method === 'qr' ? 'QR' : 'เงินสด') + '</span>' : o.status === 'void' ? '<span class="chip off">ยกเลิก</span>' : '<span class="chip pink">ค้างจ่าย</span>';
-    return '<button class="bill" data-a="bill" data-id="' + o.id + '"><b>#' + code(o.id) + '</b><span>' + (o.type === 'dinein' ? 'โต๊ะ ' + esc(o.table) : esc(o.name || 'Take Away')) +
+    return '<button class="bill" data-a="bill" data-id="' + o.id + '"><b>#' + code(o.id) + '</b><span class="bi">' + (o.type === 'dinein' ? 'โต๊ะ ' + esc(o.table) : esc(o.name || 'Take Away')) +
       '<small>สั่ง ' + day(o.createdAt).slice(5) + ' ' + hm(o.createdAt) + (o.paidAt ? ' · จ่าย ' + day(o.paidAt).slice(5) + ' ' + hm(o.paidAt) : '') + (pendingFor(o.id) ? ' · รอส่ง' : '') + '</small></span>' + st + '<em>฿' + money(o.total) + '</em></button>';
   }
   function renderBills() {
     var d = S.billsDate || today();
     var list = billsFor(d);
     var older = Object.values(S.orders).filter(function (o) { return o.status === 'open' && day(o.createdAt) < d; });
-    return header('', '', '') + '<main class="pad-b"><div class="row gap center-v"><label class="fld grow"><span>วันที่</span><input type="date" data-a="bills-date" value="' + d + '"></label>' +
+    return header('', '', '') + '<main class="pad-b"><div class="daterow"><label class="fld"><span>วันที่</span><input type="date" data-a="bills-date" value="' + d + '"></label>' +
       '<button class="btn ghost" data-a="bills-reload">โหลด</button></div>' +
       (S.remoteBills && S.remoteBills.loading ? '<p class="muted">กำลังโหลด…</p>' : '') +
       '<div class="list">' + (list.length ? list.map(billRow).join('') : '<p class="muted center">ไม่มีบิลในวันนี้</p>') + '</div>' +
@@ -574,7 +589,7 @@
       kpi('รับจากบิลวันก่อน', '฿' + money(s.fromPrev)) + kpi('ยกเลิก', s.voids + ' บิล') + '</div>' +
       '<h4 class="sec">ขายดี</h4><ol class="topl">' + (s.top.length ? s.top.map(function (t) { return '<li><span>' + esc(t.name) + '</span><b>' + t.qty + '</b></li>'; }).join('') : '<li class="muted">ยังไม่มีรายการ</li>') + '</ol>'
       : '<p class="muted">กด "โหลด" เพื่อดึงสรุปของวันนี้จากระบบกลาง</p>';
-    return header('', '', '') + '<main class="pad-b"><div class="row gap center-v"><label class="fld grow"><span>วันที่</span><input type="date" data-a="sum-date" value="' + d + '"></label><button class="btn ghost" data-a="sum-reload">โหลด</button></div>' + body +
+    return header('', '', '') + '<main class="pad-b"><div class="daterow"><label class="fld"><span>วันที่</span><input type="date" data-a="sum-date" value="' + d + '"></label><button class="btn ghost" data-a="sum-reload">โหลด</button></div>' + body +
       (canWrite() ? '<button class="btn outline wide mt" data-a="send-summary">ส่งสรุปวันนี้เข้า Telegram</button><p class="note">ระบบส่งสรุปอัตโนมัติ 20:30 (เมื่อเปิดใช้งาน)</p>' : '') + '</main>' + nav();
   }
   function kpi(label, val, cls) { return '<div class="kpi"><small>' + esc(label) + '</small><b class="' + (cls || '') + '">' + val + '</b></div>'; }
@@ -617,15 +632,15 @@
     cats.forEach(function (c) {
       html += '<div class="row center-v mt"><h4 class="grow">' + esc(c.name) + '</h4><button class="btn ghost sm" data-a="cat-edit" data-id="' + esc(c.id) + '">แก้หมวด</button></div><div class="list">';
       m.menuItems.filter(function (x) { return x.catId === c.id; }).forEach(function (x) {
-        html += '<button class="bill" data-a="item-edit" data-id="' + esc(x.id) + '"><span>' + esc(x.name) + '<small>' + (x.groups || []).map(function (g) { var gg = m.optionGroups.filter(function (y) { return y.id === g; })[0]; return gg ? esc(gg.name) : ''; }).join(', ') + '</small></span>' +
+        html += '<button class="bill" data-a="item-edit" data-id="' + esc(x.id) + '"><span class="bi">' + esc(x.name) + '<small>' + (x.groups || []).map(function (g) { var gg = m.optionGroups.filter(function (y) { return y.id === g; })[0]; return gg ? esc(gg.name) : ''; }).join(', ') + '</small></span>' +
           (x.available === false ? '<span class="chip off">ปิดขาย</span>' : '') + '<em>฿' + money(x.price) + '</em></button>';
       });
       html += '</div>';
     });
     var orphan = m.menuItems.filter(function (x) { return !cats.some(function (c) { return c.id === x.catId; }); });
-    if (orphan.length) html += '<h4 class="mt">ไม่มีหมวด</h4><div class="list">' + orphan.map(function (x) { return '<button class="bill" data-a="item-edit" data-id="' + esc(x.id) + '"><span>' + esc(x.name) + '</span><em>฿' + money(x.price) + '</em></button>'; }).join('') + '</div>';
+    if (orphan.length) html += '<h4 class="mt">ไม่มีหมวด</h4><div class="list">' + orphan.map(function (x) { return '<button class="bill" data-a="item-edit" data-id="' + esc(x.id) + '"><span class="bi">' + esc(x.name) + '</span><em>฿' + money(x.price) + '</em></button>'; }).join('') + '</div>';
     html += '<div class="row gap wrap mt"><button class="btn outline" data-a="item-new">+ เมนูใหม่</button><button class="btn ghost" data-a="cat-new">+ หมวดใหม่</button></div>' +
-      '<h4 class="mt">กลุ่มตัวเลือก</h4><div class="list">' + m.optionGroups.map(function (g) { return '<button class="bill" data-a="grp-edit" data-id="' + esc(g.id) + '"><span>' + esc(g.name) + '<small>' + g.options.map(function (o) { return esc(o.name) + (o.price ? ' +' + o.price : ''); }).join(', ') + '</small></span><em>เลือก ' + g.min + '-' + g.max + '</em></button>'; }).join('') + '</div>' +
+      '<h4 class="mt">กลุ่มตัวเลือก</h4><div class="list">' + m.optionGroups.map(function (g) { return '<button class="bill" data-a="grp-edit" data-id="' + esc(g.id) + '"><span class="bi">' + esc(g.name) + '<small>' + g.options.map(function (o) { return esc(o.name) + (o.price ? ' +' + o.price : ''); }).join(', ') + '</small></span><em>เลือก ' + g.min + '-' + g.max + '</em></button>'; }).join('') + '</div>' +
       '<button class="btn ghost mt" data-a="grp-new">+ กลุ่มตัวเลือกใหม่</button></main>';
     return html;
   }
@@ -829,7 +844,17 @@
         break;
       }
       case 'new-take': startOrder(null, { type: 'takeaway' }); break;
-      case 'new-lineman': startOrder(null, { type: 'lineman' }); break;
+      case 'new-lineman': {
+        var lm = await modal('<h3>พิมพ์ฉลาก LINE MAN</h3><p class="muted">ไม่บันทึกยอดขาย</p><label class="fld"><span>เลขออเดอร์ LINE MAN</span><input name="no" autocomplete="off" autocapitalize="characters" autofocus></label>' +
+          '<div class="row gap"><button class="btn ghost grow" data-m="no">ยกเลิก</button><button class="btn primary grow" data-m="ok">พิมพ์ฉลาก</button></div>', {
+          onOpen: function (bg) { bg.querySelector('[name=no]').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); bg.querySelector('[data-m=ok]').click(); } }); }
+        });
+        if (!lm || lm.act !== 'ok') break;
+        var no = String(lm.data.no || '').trim();
+        if (!no) { toast('ใส่เลขออเดอร์ก่อน', 'err'); break; }
+        printLabel(no);
+        break;
+      }
       case 'open-order': if (S.orders[id]) startOrder(S.orders[id]); break;
       case 'back-order': leaveOrder(); break;
       case 'back-pay': S.view = 'order'; render(); break;
