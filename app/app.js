@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.ECR;
-  var VERSION = 'R1.5';
+  var VERSION = 'R1.6';
   var KEY = 'ecr_' + CFG.branch + '_';
   var POLL_MS = 15000, IDLE_LOCK_MS = 5 * 60000;
 
@@ -142,7 +142,10 @@
 
   /* ---------------- sync engine ---------------- */
   var flushing = null, backoff = 0, nextTry = 0;
+  window.__ecrSync = function () { return { flushing: !!flushing, wait: Math.max(0, nextTry - Date.now()), backoff: backoff, outbox: S.outbox.length, sync: S.sync, err: S.syncErr }; };
+  var touched = {}; // orderId -> last local change / ack time (guards against stale getAll snapshots)
   function queue(action, orderId, payload) {
+    touched[orderId] = Date.now();
     S.outbox.push({ opId: opid(), action: action, orderId: orderId, payload: payload, at: new Date().toISOString(), tries: 0, err: '' });
     save('outbox', S.outbox);
     persistOrders();
@@ -151,7 +154,9 @@
   }
   function flush() {
     if (flushing) return flushing;
-    flushing = (async function () {
+    var run = (async function () {
+      await 0; // always yield first so `flushing` is assigned before it can be cleared (else it stays stuck forever)
+      try {
       while (S.outbox.length && navigator.onLine !== false) {
         if (Date.now() < nextTry) break;
         var op = S.outbox[0];
@@ -182,15 +187,19 @@
         save('outbox', S.outbox);
         persistOrders();
       }
+      } finally {
+        if (flushing === run) flushing = null;
+      }
       if (!S.outbox.length && S.sync !== 'error') S.sync = 'idle';
-      flushing = null;
       renderStatus();
       if (S.view !== 'order' && S.view !== 'pay') render();
     })();
-    return flushing;
+    flushing = run;
+    return run;
   }
   function applyAck(server, id) {
     if (!server) return;
+    touched[id] = Date.now();
     var more = S.outbox.some(function (o) { return o.orderId === id; });
     var local = S.orders[id];
     if (more && local) {
@@ -202,10 +211,16 @@
     if (S.outbox.length) await flush();
     if (S.outbox.length) return;
     try {
+      var started = Date.now();
       var r = await rpc('getAll', {});
       var next = {};
       r.orders.forEach(function (o) { next[o.id] = o; });
-      Object.keys(S.orders).forEach(function (id) { if (!next[id] && pendingFor(id)) next[id] = S.orders[id]; });
+      // never let a snapshot that was taken before a local change overwrite it:
+      // keep local when it still has unsent ops, is newer (higher revision), or changed after this pull began
+      Object.keys(S.orders).forEach(function (id) {
+        var loc = S.orders[id], srv = next[id];
+        if (pendingFor(id) || (touched[id] || 0) >= started || (srv && (loc.revision || 0) > (srv.revision || 0))) next[id] = loc;
+      });
       S.orders = next;
       if (r.menu) { S.menu = r.menu; save('menu', r.menu); }
       if (r.imagesVer && r.imagesVer !== load('imagesVer', '')) { await loadImages(true); save('imagesVer', r.imagesVer); }
@@ -236,7 +251,7 @@
   window.addEventListener('online', function () { nextTry = 0; flush(); pull(); });
 
   /* ---------------- auto update: reload when a new version is published ---------------- */
-  var updWanted = false;
+  var updWanted = false, reloading = false;
   async function checkUpdate() {
     try {
       var r = await fetch('../version.json?x=' + Date.now(), { cache: 'no-store' });
@@ -246,12 +261,13 @@
     } catch (e) { /* offline: try later */ }
   }
   function tryReload() {
-    if (!updWanted || S.outbox.length || document.querySelector('.modal-bg')) return;
+    if (!updWanted || document.querySelector('.modal-bg')) return; // queued ops are kept in localStorage and resent after reload
     if (S.auth && ['tables', 'bills', 'summary', 'settings'].indexOf(S.view) < 0) return; // never mid-order / pay / menu edit
     var key = 'ecr_reload_' + updWanted, last = 0;
     try { last = Number(localStorage.getItem(key) || 0); } catch (e) {}
     if (Date.now() - last < 15 * 60000) return; // one attempt per version per 15 min (avoids loops if a stale copy is cached)
     try { localStorage.setItem(key, String(Date.now())); } catch (e) {}
+    save('outbox', S.outbox); reloading = true;
     location.reload();
   }
   setTimeout(checkUpdate, 5000);
@@ -1058,5 +1074,5 @@
   if (S.auth) { if (!S.locked) pull(); loadImages(false); flush(); }
   setInterval(function () { if (document.visibilityState === 'visible' && !S.locked && S.view !== 'pay') { if (S.outbox.length) flush(); else pull(); } }, POLL_MS);
   setInterval(renderStatus, 30000);
-  window.addEventListener('beforeunload', function (e) { if (S.outbox.length) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', function (e) { if (S.outbox.length && !reloading) { e.preventDefault(); e.returnValue = ''; } });
 })();

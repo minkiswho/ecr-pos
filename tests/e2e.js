@@ -29,16 +29,23 @@ function backend(branch) {
 
 const B = { surawong: backend('surawong'), ekkamai: backend('ekkamai') };
 let offline = false;
+let slowGetAll = 0;
+const reqLog = [];
 const server = http.createServer((req, res) => {
+  if (req.method === 'OPTIONS') reqLog.push(Date.now() % 100000 + ':OPTIONS');
   const u = new URL(req.url, 'http://x');
   const m = u.pathname.match(/^\/api\/(\w+)$/);
   if (m && req.method === 'POST') {
+    reqLog.push(Date.now() % 100000 + ':arrive');
     let body = '';
     req.on('data', c => (body += c));
     req.on('end', () => {
       if (offline) { req.socket.destroy(); return; }
-      const out = B[m[1]].ctx.doPost({ postData: { contents: body } }).text;
-      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(out);
+      try { reqLog.push(Date.now() % 100000 + ':' + JSON.parse(body).action); } catch (e) {}
+      const out = B[m[1]].ctx.doPost({ postData: { contents: body } }).text; // snapshot taken now
+      const act = (body.match(/"action":"(\w+)"/) || [])[1];
+      const send = () => { reqLog.push(Date.now() % 100000 + ':done-' + act); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(out); };
+      if (slowGetAll && /"action":"getAll"/.test(body)) setTimeout(send, slowGetAll); else send();
     });
     return;
   }
@@ -61,6 +68,7 @@ const server = http.createServer((req, res) => {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
+  await page.addInitScript(() => window.addEventListener('unhandledrejection', e => console.error('UNHANDLED ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason))));
   page.on('console', m => { if (m.type() === 'error' && !/fonts|Failed to load resource/.test(m.text())) errors.push(m.text()); });
   const shot = n => page.screenshot({ path: path.join(process.env.SHOTS || '/tmp', n + '.png') });
   const step = async (name, fn) => { await fn(); console.log('  ✓ ' + name); };
@@ -161,6 +169,32 @@ const server = http.createServer((req, res) => {
     await page.waitForSelector('.pill.ok', { timeout: 15000 });
     assert.strictEqual(S['รายการขาย'].data.length, before + 1);
   });
+  if (!process.env.SKIPRACE) await step('race: slow sync response arriving after a save does not revert the order', async () => {
+    await page.click('[data-a=view][data-v=tables]');
+    await page.click('[data-a=new-table][data-v="4"]');
+    await page.click('.mi:has-text("น้ำเปล่า")');
+    await page.click('[data-a=save-order]');
+    await page.waitForFunction(() => !/กำลังส่ง|รอส่ง/.test(document.querySelector('.pill').textContent));
+    await page.waitForTimeout(500);
+    slowGetAll = 2500;
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); // unlock/return → pull starts
+    await page.waitForTimeout(200);
+    await page.click('.tile.open:has-text("โต๊ะ 4")');
+    await page.click('.mi:has-text("โค้ก")');
+    await page.click('[data-a=save-order]'); // saved + acked while getAll is still in flight
+    await page.waitForTimeout(3500); // stale getAll lands
+    slowGetAll = 0;
+    const tile = await page.textContent('.tile.open:has-text("โต๊ะ 4")');
+    assert.ok(tile.includes('25'), 'tile reverted to stale total: ' + tile);
+    await page.click('.tile.open:has-text("โต๊ะ 4")');
+    await page.click('[data-a=go-pay]');
+    await page.click('[data-a=quick]');
+    await page.uncheck('[data-a=pay-print]');
+    await page.click('[data-a=confirm-pay]');
+    await page.waitForFunction(() => !/กำลังส่ง|รอส่ง/.test(document.querySelector('.pill').textContent), null, { timeout: 20000 }).catch(() => {});
+    const o = S.Orders.data.find(r => r[3] === '4' || r[3] === 4);
+    await shot('race-after-pay'); const rv = await page.evaluate(() => [localStorage.getItem('ecr_surawong_review'), localStorage.getItem('ecr_surawong_outbox'), document.querySelector('.pill').textContent, JSON.stringify(window.__ecrSync())]); assert.strictEqual(o[1], 'paid', 'payment not applied: ' + JSON.stringify(o.slice(0, 6)) + ' review=' + rv + ' log=' + reqLog.slice(-12).join(',') + ' errors=' + JSON.stringify(errors));
+  });
   await step('manager sets lock PIN; reload locks; PIN unlocks', async () => {
     await page.click('[data-a=view][data-v=settings]');
     await page.click('[data-a=logout]');
@@ -178,6 +212,19 @@ const server = http.createServer((req, res) => {
     await page.waitForSelector('.pad');
     for (const k of ['1', '3', '5', '7', 'OK']) await page.click(`[data-a=pin][data-v="${k}"]`);
     await page.waitForSelector('.tabs');
+  });
+  await step('after reload while logged in, new orders still sync', async () => {
+    await page.reload();
+    await page.waitForSelector('.pad');
+    for (const k of ['1', '3', '5', '7', 'OK']) await page.click(`[data-a=pin][data-v="${k}"]`);
+    await page.waitForSelector('.tile');
+    await page.waitForTimeout(1500);
+    const before = S.Orders.data.length;
+    await page.click('[data-a=new-table][data-v="5"]');
+    await page.click('.mi:has-text("น้ำเปล่า")');
+    await page.click('[data-a=save-order]');
+    await page.waitForFunction(() => !/กำลังส่ง|รอส่ง/.test(document.querySelector('.pill').textContent), null, { timeout: 10000 });
+    assert.strictEqual(S.Orders.data.length, before + 1, 'order stuck on device after reload');
   });
   await step('viewer is read-only', async () => {
     const p2 = await ctx.newPage();
