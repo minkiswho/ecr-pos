@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.ECR;
-  var VERSION = 'R1.4';
+  var VERSION = 'R1.5';
   var KEY = 'ecr_' + CFG.branch + '_';
   var POLL_MS = 15000, IDLE_LOCK_MS = 5 * 60000;
 
@@ -115,7 +115,11 @@
       '<div class="row gap"><button class="btn ghost grow" data-m="no">ยกเลิก</button><button class="btn primary grow" data-m="ok">อนุมัติ</button></div>');
     if (!r || r.act !== 'ok' || !r.data.pin) return null;
     try { await rpc('checkPin', { managerPin: r.data.pin }); return r.data.pin; }
-    catch (e) { toast(e.message, 'err'); return null; }
+    catch (e) {
+      if (e.code === 'NO_PIN') await modal('<h3>ยังไม่ได้ตั้ง PIN ผู้จัดการ</h3><p class="muted">ตั้งครั้งแรกได้ดังนี้: ตั้งค่า → ออกจากระบบ → เข้าด้วย<b>รหัสผู้จัดการ</b> → ตั้งค่า → ตั้ง PIN ผู้จัดการ แล้วค่อยเข้าด้วยรหัสแคชเชียร์ตามเดิม</p><button class="btn primary" data-m="ok">เข้าใจแล้ว</button>');
+      else toast(e.message, 'err');
+      return null;
+    }
   }
 
   /* ---------------- API ---------------- */
@@ -230,6 +234,29 @@
     else { pull(); if (window.ECRPrinter) ECRPrinter.reconnect().then(renderStatus); }
   });
   window.addEventListener('online', function () { nextTry = 0; flush(); pull(); });
+
+  /* ---------------- auto update: reload when a new version is published ---------------- */
+  var updWanted = false;
+  async function checkUpdate() {
+    try {
+      var r = await fetch('../version.json?x=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      var j = await r.json();
+      if (j && j.v && j.v !== VERSION) { updWanted = j.v; tryReload(); }
+    } catch (e) { /* offline: try later */ }
+  }
+  function tryReload() {
+    if (!updWanted || S.outbox.length || document.querySelector('.modal-bg')) return;
+    if (S.auth && ['tables', 'bills', 'summary', 'settings'].indexOf(S.view) < 0) return; // never mid-order / pay / menu edit
+    var key = 'ecr_reload_' + updWanted, last = 0;
+    try { last = Number(localStorage.getItem(key) || 0); } catch (e) {}
+    if (Date.now() - last < 15 * 60000) return; // one attempt per version per 15 min (avoids loops if a stale copy is cached)
+    try { localStorage.setItem(key, String(Date.now())); } catch (e) {}
+    location.reload();
+  }
+  setTimeout(checkUpdate, 5000);
+  setInterval(checkUpdate, 120000);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') checkUpdate(); });
 
   /* ---------------- pricing (local mirror of server rules) ---------------- */
   function menuItem(id) { return (S.menu && S.menu.menuItems || []).filter(function (m) { return m.id === id; })[0]; }
@@ -834,7 +861,7 @@
     var a = b.getAttribute('data-a'), v = b.getAttribute('data-v'), id = b.getAttribute('data-id');
     if (b.tagName === 'INPUT') return;
     switch (a) {
-      case 'view': S.view = v; S.remoteSummary = null; render(); if (v === 'settings' && isMgr() && !S.adminStatus) refreshAdmin(); break;
+      case 'view': S.view = v; S.remoteSummary = null; render(); tryReload(); if (v === 'settings' && isMgr() && !S.adminStatus) refreshAdmin(); break;
       case 'pin': return pinKey(v);
       case 'new-table': startOrder(null, { type: 'dinein', table: v }); break;
       case 'add-table': {

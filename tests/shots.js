@@ -57,7 +57,7 @@ const server = http.createServer((req, res) => {
 (async () => {
   await new Promise(r => server.listen(8766, r));
   const browser = await chromium.launch();
-  for (const w of [390, 830]) {
+  for (const w of (process.env.WIDTHS||'390,830').split(',').map(Number)) {
     const ctx = await browser.newContext({ viewport: { width: w, height: 900 } });
     const page = await ctx.newPage();
     await page.goto('http://localhost:8766/surawong/');
