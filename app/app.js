@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.ECR;
-  var VERSION = 'R1.6';
+  var VERSION = 'R1.7';
   var KEY = 'ecr_' + CFG.branch + '_';
   var POLL_MS = 15000, IDLE_LOCK_MS = 5 * 60000;
 
@@ -172,7 +172,7 @@
           op.tries++; op.err = e.message;
           if (e.code === 'AUTH') { S.sync = 'error'; S.syncErr = e.message; save('outbox', S.outbox); renderStatus(); break; }
           if (TRANSIENT[e.code]) {
-            backoff = Math.min(backoff ? backoff * 2 : 3000, 60000); nextTry = Date.now() + backoff;
+            backoff = Math.min(backoff ? backoff * 2 : 3000, 30000); nextTry = Date.now() + backoff;
             S.sync = 'error'; S.syncErr = e.message; save('outbox', S.outbox); renderStatus();
             setTimeout(flush, backoff + 100);
             break;
@@ -246,7 +246,7 @@
   setInterval(function () { if (!S.locked && S.auth && S.auth.lockHash && Date.now() - lastAct > IDLE_LOCK_MS && !document.querySelector('.modal-bg')) lockNow(); }, 15000);
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'hidden') { if (S.view !== 'pay') lockNow(); }
-    else { pull(); if (window.ECRPrinter) ECRPrinter.reconnect().then(renderStatus); }
+    else { nextTry = 0; pull(); if (window.ECRPrinter) ECRPrinter.reconnect().then(renderStatus); }
   });
   window.addEventListener('online', function () { nextTry = 0; flush(); pull(); });
 
@@ -1014,7 +1014,7 @@
     if (k === 'C') pinBuf = '';
     else if (k === 'OK') {
       var h = await sha(S.auth.salt + '|' + pinBuf);
-      if (h === S.auth.lockHash) { S.locked = false; S.lockFails = 0; lastAct = Date.now(); render(); pull(); ECRPrinter && ECRPrinter.reconnect().then(renderStatus); return; }
+      if (h === S.auth.lockHash) { S.locked = false; S.lockFails = 0; lastAct = Date.now(); render(); nextTry = 0; pull(); ECRPrinter && ECRPrinter.reconnect().then(renderStatus); return; }
       S.lockFails++; pinBuf = '';
       if (S.lockFails >= 5) { S.lockUntil = Date.now() + 30000; S.lockFails = 0; renderLock(); setTimeout(renderLock, 30500); return; }
       toast('PIN ไม่ถูกต้อง', 'err');
