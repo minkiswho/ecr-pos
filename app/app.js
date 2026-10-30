@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.ECR;
-  var VERSION = 'R1.3';
+  var VERSION = 'R1.4';
   var KEY = 'ecr_' + CFG.branch + '_';
   var POLL_MS = 15000, IDLE_LOCK_MS = 5 * 60000;
 
@@ -38,6 +38,7 @@
   function hm(iso) { return iso ? tfmt.format(new Date(iso)) : ''; }
   function today() { return day(new Date().toISOString()); }
   function mins(iso) { return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)); }
+  function ago(iso) { const m = mins(iso); return m < 60 ? m + ' นาที' : m < 1440 ? Math.floor(m / 60) + ' ชม.' : Math.floor(m / 1440) + ' วัน'; }
   function role() { return S.auth && S.auth.role; }
   function canWrite() { return role() === 'cashier' || role() === 'manager'; }
   function isMgr() { return role() === 'manager' || S.mgrSession; }
@@ -473,11 +474,11 @@
     var rec = paidToday.reduce(function (a, o) { return a + o.total; }, 0);
     var tiles = tl.nums.map(function (n) {
       var o = byTable[n];
-      if (o) return '<button class="tile open" data-a="open-order" data-id="' + o.id + '"><b>โต๊ะ ' + esc(n) + '</b><span><em>฿' + money(o.total) + '</em><small>ค้างจ่าย · ' + mins(o.createdAt) + ' นาที' + (pendingFor(o.id) ? ' · รอส่ง' : '') + '</small></span></button>';
+      if (o) return '<button class="tile open" data-a="open-order" data-id="' + o.id + '"><b>โต๊ะ ' + esc(n) + '</b><span><em>฿' + money(o.total) + '</em><small>ค้างจ่าย · ' + ago(o.createdAt) + (pendingFor(o.id) ? ' · รอส่ง' : '') + '</small></span></button>';
       return '<button class="tile" data-a="new-table" data-v="' + esc(n) + '"' + (w ? '' : ' disabled') + '><b>โต๊ะ ' + esc(n) + '</b><small>ว่าง</small></button>';
     }).join('');
     var takeTiles = takeOpen.map(function (o) {
-      return '<button class="tile open" data-a="open-order" data-id="' + o.id + '"><b>' + esc(o.name || 'Take Away') + '</b><span><em>฿' + money(o.total) + '</em><small>Take Away · ' + mins(o.createdAt) + ' นาที</small></span></button>';
+      return '<button class="tile open" data-a="open-order" data-id="' + o.id + '"><b>' + esc(o.name || 'Take Away') + '</b><span><em>฿' + money(o.total) + '</em><small>Take Away · ' + ago(o.createdAt) + '</small></span></button>';
     }).join('');
     return header('', '', '') +
       '<main class="pad-b">' +
