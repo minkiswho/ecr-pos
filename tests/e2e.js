@@ -226,6 +226,46 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => !/กำลังส่ง|รอส่ง/.test(document.querySelector('.pill').textContent), null, { timeout: 10000 });
     assert.strictEqual(S.Orders.data.length, before + 1, 'order stuck on device after reload');
   });
+  await step('menu editor: drag to reorder items and categories, save', async () => {
+    await page.click('[data-a=view][data-v=settings]');
+    await page.click('[data-a=menu-edit]');
+    await page.waitForSelector('.catblk');
+    const menuNow = () => JSON.parse(B.surawong.ss.map.Config.data.find(r => r[0] === 'menu')[1]);
+    const before = menuNow();
+    const firstCat = await page.getAttribute('.catblk >> nth=0', 'data-id');
+    const rows = page.locator(`.list[data-cat="${firstCat}"] .srow`);
+    const n = await rows.count();
+    const lastId = await rows.nth(n - 1).getAttribute('data-id');
+    const drag = async (from, to, below) => {
+      const a = await from.boundingBox(), b = await to.boundingBox();
+      await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await page.mouse.down();
+      const ty = below ? b.y + b.height - 3 : b.y + 3;
+      for (let i = 1; i <= 12; i++) await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2 + (ty - (a.y + a.height / 2)) * i / 12);
+      await page.mouse.up(); await page.waitForTimeout(150);
+    };
+    await rows.nth(n - 1).scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await drag(rows.nth(n - 1).locator('.drag'), rows.nth(0));
+    assert.strictEqual(await page.getAttribute(`.list[data-cat="${firstCat}"] .srow >> nth=0`, 'data-id'), lastId, 'item did not move to top');
+    await shot('10-menu-dnd');
+    const secondCat = await page.getAttribute('.catblk >> nth=1', 'data-id');
+    await drag(page.locator('.catblk >> nth=1').locator('.cathead .drag'), page.locator('.catblk >> nth=0').locator('.cathead'));
+    assert.strictEqual(await page.getAttribute('.catblk >> nth=0', 'data-id'), secondCat, 'category did not move to top');
+    await page.click('[data-a=menu-save]');
+    await page.waitForSelector('.toast.show:has-text("บันทึกเมนู")');
+    const after = menuNow();
+    const catsSorted = after.categories.slice().sort((x, y) => x.order - y.order).map(c => c.id);
+    assert.strictEqual(catsSorted[0], secondCat);
+    assert.strictEqual(after.menuItems.filter(x => x.catId === firstCat)[0].id, lastId);
+    assert.strictEqual(after.menuItems.length, before.menuItems.length, 'items lost');
+    // POS screen follows the new order
+    await page.click('[data-a=view][data-v=tables]');
+    await page.click('[data-a=new-take]');
+    const chip1 = await page.textContent('.chips button >> nth=1');
+    assert.strictEqual(chip1.trim(), after.categories.find(c => c.id === secondCat).name);
+    await page.click('[data-a=back-order]');
+    if (await page.locator('.modal [data-m=yes]').count()) await page.click('.modal [data-m=yes]');
+  });
   await step('viewer is read-only', async () => {
     const p2 = await ctx.newPage();
     await p2.goto('http://localhost:8765/ekkamai/');

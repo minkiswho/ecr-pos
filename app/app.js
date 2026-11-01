@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var CFG = window.ECR;
-  var VERSION = 'R1.7';
+  var VERSION = 'R1.8';
   var KEY = 'ecr_' + CFG.branch + '_';
   var POLL_MS = 15000, IDLE_LOCK_MS = 5 * 60000;
 
@@ -206,6 +206,7 @@
       local.revision = server.revision; local.createdAt = server.createdAt; local.name = server.name;
     } else S.orders[id] = server;
   }
+  var imgMissChecked = '';
   async function pull() {
     if (!S.auth || S.locked) return;
     if (S.outbox.length) await flush();
@@ -224,6 +225,11 @@
       S.orders = next;
       if (r.menu) { S.menu = r.menu; save('menu', r.menu); }
       if (r.imagesVer && r.imagesVer !== load('imagesVer', '')) { await loadImages(true); save('imagesVer', r.imagesVer); }
+      else {
+        // menu items added elsewhere (e.g. copied in the sheet) may have pictures this device hasn't fetched yet
+        var miss = ((S.menu && S.menu.menuItems) || []).map(function (x) { return x.id; }).filter(function (id) { return !S.images[id]; }).sort().join(',');
+        if (miss && miss !== imgMissChecked) { imgMissChecked = miss; loadImages(true); }
+      }
       if (r.mode && S.auth.mode !== r.mode) { S.auth.mode = r.mode; save('auth', S.auth); }
       persistOrders();
       S.lastSync = Date.now(); S.sync = 'idle'; S.syncErr = '';
@@ -669,18 +675,77 @@
   }
 
   /* ---------------- menu editor ---------------- */
+  /* ---------------- drag & drop reorder (menu editor) ---------------- */
+  function applyMenuOrder(catIds, itemCat, itemIds) {
+    var m = S.menuDraft;
+    if (catIds) catIds.forEach(function (id, i) { var c = m.categories.filter(function (x) { return x.id === id; })[0]; if (c) c.order = i + 1; });
+    var cats = m.categories.slice().sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+    var byId = {}; m.menuItems.forEach(function (x) { byId[x.id] = x; });
+    var out = [];
+    cats.forEach(function (c) {
+      var ids = c.id === itemCat ? itemIds : m.menuItems.filter(function (x) { return x.catId === c.id; }).map(function (x) { return x.id; });
+      ids.forEach(function (id) { if (byId[id] && byId[id].catId === c.id) { out.push(byId[id]); delete byId[id]; } });
+    });
+    m.menuItems.forEach(function (x) { if (byId[x.id]) out.push(x); }); // orphans / anything not placed keep their place at the end
+    m.menuItems = out;
+  }
+  document.addEventListener('pointerdown', function (e) {
+    var h = e.target.closest && e.target.closest('.drag');
+    if (!h || S.view !== 'menuedit') return;
+    var kind = h.getAttribute('data-drag');
+    var item = h.closest(kind === 'cat' ? '.catblk' : '.srow');
+    var list = item && item.parentElement;
+    if (!list) return;
+    e.preventDefault();
+    var sel = kind === 'cat' ? '.catblk' : '.srow';
+    if (kind === 'cat') list.classList.add('collapsed'); // shrink to headers so categories are easy to move
+    var rect = item.getBoundingClientRect(), offY = e.clientY - rect.top, lastY = e.clientY;
+    var ph = document.createElement('div'); ph.className = 'drag-ph'; ph.style.height = rect.height + 'px';
+    list.insertBefore(ph, item.nextSibling);
+    item.classList.add('dragging');
+    item.style.width = rect.width + 'px'; item.style.left = rect.left + 'px'; item.style.top = rect.top + 'px';
+    try { h.setPointerCapture(e.pointerId); } catch (err) { }
+    if (navigator.vibrate) try { navigator.vibrate(10); } catch (err) { }
+    function place(y) {
+      item.style.top = (y - offY) + 'px';
+      var sibs = [].slice.call(list.children).filter(function (n) { return n !== item && n.matches(sel); });
+      var before = null;
+      for (var i = 0; i < sibs.length; i++) { var r = sibs[i].getBoundingClientRect(); if (y < r.top + r.height / 2) { before = sibs[i]; break; } }
+      if (before) { if (ph.nextSibling !== before) list.insertBefore(ph, before); }
+      else if (sibs.length) { var last = sibs[sibs.length - 1]; if (last.nextSibling !== ph) list.insertBefore(ph, last.nextSibling); }
+    }
+    var scroller = setInterval(function () {
+      var v = window.innerHeight, d = lastY < 90 ? -12 : lastY > v - 90 ? 12 : 0;
+      if (d) { window.scrollBy(0, d); place(lastY); }
+    }, 16);
+    function move(ev) { lastY = ev.clientY; place(ev.clientY); }
+    function up() {
+      clearInterval(scroller);
+      h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up);
+      list.insertBefore(item, ph); ph.remove();
+      item.classList.remove('dragging'); item.style.width = item.style.left = item.style.top = '';
+      list.classList.remove('collapsed');
+      var ids = [].slice.call(list.children).filter(function (n) { return n.matches(sel); }).map(function (n) { return n.getAttribute('data-id'); });
+      if (kind === 'cat') applyMenuOrder(ids); else applyMenuOrder(null, list.getAttribute('data-cat'), ids);
+      var y = window.scrollY; render(); window.scrollTo(0, y);
+    }
+    h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+  });
+
   function renderMenuEdit() {
     var m = S.menuDraft;
     var cats = m.categories.slice().sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
     var html = header('<b>แก้เมนู</b><small>' + m.menuItems.length + ' รายการ</small>', 'menu-cancel', '<button class="btn primary sm" data-a="menu-save">บันทึก</button>') + '<main class="pad-b">';
+    html += '<p class="muted small">ลาก <b class="dragi">⋮⋮</b> เพื่อเรียงหมวดหรือเมนู แล้วกด "บันทึก"</p><div class="cats">';
     cats.forEach(function (c) {
-      html += '<div class="row center-v mt"><h4 class="grow">' + esc(c.name) + '</h4><button class="btn ghost sm" data-a="cat-edit" data-id="' + esc(c.id) + '">แก้หมวด</button></div><div class="list">';
+      html += '<section class="catblk" data-id="' + esc(c.id) + '"><div class="row center-v mt cathead"><span class="drag" data-drag="cat" aria-label="ลากเพื่อเรียงหมวด">⋮⋮</span><h4 class="grow">' + esc(c.name) + '</h4><button class="btn ghost sm" data-a="cat-edit" data-id="' + esc(c.id) + '">แก้หมวด</button></div><div class="list" data-cat="' + esc(c.id) + '">';
       m.menuItems.filter(function (x) { return x.catId === c.id; }).forEach(function (x) {
-        html += '<button class="bill" data-a="item-edit" data-id="' + esc(x.id) + '"><span class="bi">' + esc(x.name) + '<small>' + (x.groups || []).map(function (g) { var gg = m.optionGroups.filter(function (y) { return y.id === g; })[0]; return gg ? esc(gg.name) : ''; }).join(', ') + '</small></span>' +
-          (x.available === false ? '<span class="chip off">ปิดขาย</span>' : '') + '<em>฿' + money(x.price) + '</em></button>';
+        html += '<div class="srow" data-id="' + esc(x.id) + '"><span class="drag" data-drag="item" aria-label="ลากเพื่อเรียงเมนู">⋮⋮</span><button class="bill grow" data-a="item-edit" data-id="' + esc(x.id) + '"><span class="bi">' + esc(x.name) + '<small>' + (x.groups || []).map(function (g) { var gg = m.optionGroups.filter(function (y) { return y.id === g; })[0]; return gg ? esc(gg.name) : ''; }).join(', ') + '</small></span>' +
+          (x.available === false ? '<span class="chip off">ปิดขาย</span>' : '') + '<em>฿' + money(x.price) + '</em></button></div>';
       });
-      html += '</div>';
+      html += '</div></section>';
     });
+    html += '</div>';
     var orphan = m.menuItems.filter(function (x) { return !cats.some(function (c) { return c.id === x.catId; }); });
     if (orphan.length) html += '<h4 class="mt">ไม่มีหมวด</h4><div class="list">' + orphan.map(function (x) { return '<button class="bill" data-a="item-edit" data-id="' + esc(x.id) + '"><span class="bi">' + esc(x.name) + '</span><em>฿' + money(x.price) + '</em></button>'; }).join('') + '</div>';
     html += '<div class="row gap wrap mt"><button class="btn outline" data-a="item-new">+ เมนูใหม่</button><button class="btn ghost" data-a="cat-new">+ หมวดใหม่</button></div>' +
